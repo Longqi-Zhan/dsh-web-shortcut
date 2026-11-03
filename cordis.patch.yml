@@ -1,0 +1,4 @@
+# Install the DSH Web desktop shortcut and its standalone window integration.
+- insert:
+    - id: web-shortcut
+      name: 'dsh-web-shortcut'
