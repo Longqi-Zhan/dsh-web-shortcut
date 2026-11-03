@@ -17,7 +17,8 @@
     "assets/dsh-web",
     "assets/dsh-web-view",
     "assets/dsh-web.svg",
-    "README.md"
+    "README.md",
+    "README.zh-CN.md"
   ],
   "license": "MIT",
   "dsh": {

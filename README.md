@@ -3,6 +3,8 @@
 A DSH profile plugin that installs a desktop shortcut and a standalone window
 for the DeepSeek Harness Web UI. It is Linux-only (GNOME/GTK + WebKitGTK).
 
+English | [简体中文](README.zh-CN.md)
+
 ## What it installs
 
 | Path | Purpose |
