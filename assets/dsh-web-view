@@ -1,0 +1,253 @@
+#!/usr/bin/python3
+"""DSH Web — a standalone WebKitGTK window for the DeepSeek Harness Web UI.
+
+This is the window the desktop shortcut opens. It sets its own Wayland
+app_id / X11 WM_CLASS to ``dsh-web`` so GNOME Shell groups it under the DSH
+Web icon instead of Firefox, and it has no browser chrome.
+
+Authentication: DSH Web protects its origin with a process launch token and a
+signed browser cookie. When the launcher hands us a token URL we simply load
+it. When it hands us the clean origin (a server this shortcut did not start),
+we copy *only* the matching ``dsh-auth-*`` cookie for that loopback authority
+out of the local Firefox profile and add it to WebKit's cookie jar. No cookie
+value is logged or sent anywhere else. If no such cookie exists we fall back
+to Firefox so the UI never opens into a 401 page.
+"""
+
+from __future__ import annotations
+
+import base64
+import glob
+import hashlib
+import os
+import shutil
+import sqlite3
+import subprocess
+import sys
+import tempfile
+import urllib.parse
+import warnings
+
+import gi
+
+gi.require_version("Gtk", "3.0")
+gi.require_version("Gdk", "3.0")
+gi.require_version("WebKit2", "4.1")
+gi.require_version("Soup", "3.0")
+
+warnings.filterwarnings("ignore", category=DeprecationWarning)
+
+from gi.repository import Gdk, GLib, Gtk, Soup, WebKit2  # noqa: E402
+
+APP_ID = "dsh-web"
+APP_NAME = "DSH Web"
+COOKIE_PREFIX = "dsh-auth-"
+COOKIE_MAX_AGE = 31536000  # one year
+
+
+def debug(message: str) -> None:
+    print(f"dsh-web-view: {message}", file=sys.stderr, flush=True)
+
+
+def is_loopback(host: str) -> bool:
+    return host in {"127.0.0.1", "::1", "localhost"}
+
+
+def authority_of(url: urllib.parse.SplitResult) -> str:
+    """The cookie audience DSH Web uses: host[:port] unless the port is default."""
+    default_port = 443 if url.scheme == "https" else 80
+    if url.port and url.port != default_port:
+        return f"{url.hostname}:{url.port}"
+    return url.hostname or ""
+
+
+def cookie_name_for(authority: str) -> str:
+    digest = hashlib.sha256(authority.encode("utf-8")).digest()
+    return COOKIE_PREFIX + base64.urlsafe_b64encode(digest).decode("ascii").rstrip("=")
+
+
+def profile_cookie_databases() -> list[str]:
+    roots = [
+        "~/snap/firefox/common/.mozilla/firefox",
+        "~/.mozilla/firefox",
+        "~/.var/app/org.mozilla.firefox/.mozilla/firefox",
+    ]
+    databases: list[str] = []
+    for root in roots:
+        databases.extend(glob.glob(os.path.join(os.path.expanduser(root), "*", "cookies.sqlite")))
+    return databases
+
+
+def read_firefox_cookie(host: str, name: str):
+    """Return (host, name, value, path, secure, http_only) or None.
+
+    Firefox may hold the database open, so try a read-only URI first and fall
+    back to reading a private copy (including any WAL file).
+    """
+    for database in profile_cookie_databases():
+        try:
+            connection = sqlite3.connect(f"file:{database}?mode=ro", uri=True, timeout=2)
+            try:
+                row = connection.execute(
+                    "SELECT host, name, value, path, isSecure, isHttpOnly "
+                    "FROM moz_cookies WHERE name = ? AND (host = ? OR host = ?) "
+                    "ORDER BY expiry DESC LIMIT 1",
+                    (name, host, "." + host),
+                ).fetchone()
+            finally:
+                connection.close()
+            if row:
+                return row
+        except sqlite3.Error:
+            pass
+
+        temporary = tempfile.mkdtemp(prefix="dsh-web-cookie-")
+        try:
+            for suffix in ("", "-wal", "-shm"):
+                source = database + suffix
+                if os.path.exists(source):
+                    shutil.copy2(source, os.path.join(temporary, "cookies.sqlite" + suffix))
+            connection = sqlite3.connect(os.path.join(temporary, "cookies.sqlite"), timeout=2)
+            try:
+                row = connection.execute(
+                    "SELECT host, name, value, path, isSecure, isHttpOnly "
+                    "FROM moz_cookies WHERE name = ? AND (host = ? OR host = ?) "
+                    "ORDER BY expiry DESC LIMIT 1",
+                    (name, host, "." + host),
+                ).fetchone()
+            finally:
+                connection.close()
+            if row:
+                return row
+        except (OSError, sqlite3.Error):
+            pass
+        finally:
+            shutil.rmtree(temporary, ignore_errors=True)
+    return None
+
+
+def open_in_firefox(url: str) -> None:
+    for command in (["firefox", "--new-window", url], ["xdg-open", url]):
+        try:
+            subprocess.Popen(
+                command,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+            return
+        except OSError:
+            continue
+    debug("could not find Firefox or xdg-open")
+
+
+class DshWebWindow(Gtk.Window):
+    def __init__(self, url: str) -> None:
+        super().__init__(title=APP_NAME)
+        self.set_default_size(1360, 900)
+        self.set_wmclass(APP_ID, APP_ID)
+        self.set_icon_name(APP_ID)
+        self.set_position(Gtk.WindowPosition.CENTER)
+        self.connect("destroy", Gtk.main_quit)
+        self.connect("key-press-event", self._on_key_press)
+
+        self.webview = WebKit2.WebView()
+        settings = self.webview.get_settings()
+        settings.set_enable_javascript(True)
+        settings.set_enable_developer_extras(True)
+        settings.set_enable_mediasource(True)
+        settings.set_enable_webgl(True)
+        self.webview.connect("notify::title", self._on_title_changed)
+        self.add(self.webview)
+        self.url = url
+
+    def _on_title_changed(self, view, _param) -> None:
+        page_title = view.get_title()
+        if page_title and page_title != APP_NAME:
+            self.set_title(f"{APP_NAME} — {page_title}")
+
+    def _on_key_press(self, _window, event) -> bool:
+        ctrl = bool(event.state & Gdk.ModifierType.CONTROL_MASK)
+        if event.keyval == Gdk.KEY_F5 or (ctrl and event.keyval in (Gdk.KEY_r, Gdk.KEY_R)):
+            self.webview.reload()
+            return True
+        if event.keyval == Gdk.KEY_F11:
+            if self.is_maximized():
+                self.unmaximize()
+            else:
+                self.maximize()
+            return True
+        if ctrl and event.keyval in (Gdk.KEY_q, Gdk.KEY_Q, Gdk.KEY_w, Gdk.KEY_W):
+            self.destroy()
+            return True
+        return False
+
+    def load(self) -> None:
+        self.webview.load_uri(self.url)
+
+
+def main(argv: list[str]) -> int:
+    if len(argv) != 2 or not argv[1]:
+        debug("usage: dsh-web-view <url>")
+        return 2
+
+    raw_url = argv[1]
+    try:
+        parsed = urllib.parse.urlsplit(raw_url)
+    except ValueError:
+        debug(f"invalid URL: {raw_url}")
+        return 2
+    if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        debug(f"unsupported URL: {raw_url}")
+        return 2
+
+    GLib.set_prgname(APP_ID)
+    GLib.set_application_name(APP_NAME)
+    Gtk.Window.set_default_icon_name(APP_ID)
+
+    has_token = "token" in urllib.parse.parse_qs(parsed.query)
+    cookie = None
+    if not has_token and is_loopback(parsed.hostname):
+        cookie = read_firefox_cookie(parsed.hostname, cookie_name_for(authority_of(parsed)))
+
+    if cookie is None and not has_token:
+        # Nothing to authenticate with: Firefox already has the right session
+        # cookie, so use it rather than showing a bare 401 page.
+        debug("no DSH cookie available; handing the URL to Firefox")
+        open_in_firefox(raw_url)
+        return 0
+
+    window = DshWebWindow(raw_url)
+    window.show_all()
+
+    if cookie is not None:
+        host, name, value, path, secure, http_only = cookie
+        web_cookie = Soup.Cookie.new(name, value, host, path, COOKIE_MAX_AGE)
+        web_cookie.set_http_only(bool(http_only))
+        web_cookie.set_secure(bool(secure))
+
+        def on_cookie_added(manager, result, _data):
+            try:
+                manager.add_cookie_finish(result)
+            except GLib.Error as error:
+                debug(f"could not add the DSH cookie: {error.message}")
+            window.load()
+
+        manager = window.webview.get_context().get_cookie_manager()
+        manager.add_cookie(web_cookie, None, on_cookie_added, None)
+    else:
+        window.load()
+
+    Gtk.main()
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        code = main(sys.argv)
+    except KeyboardInterrupt:
+        code = 130
+    # WebKitGTK occasionally crashes during interpreter teardown; the window is
+    # already gone at this point, so exit without running Python destructors.
+    os._exit(code)

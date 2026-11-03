@@ -1,0 +1,31 @@
+{
+  "name": "dsh-web-shortcut",
+  "version": "0.1.0",
+  "private": false,
+  "description": "Install a desktop shortcut and a standalone WebKit window for the DeepSeek Harness Web UI.",
+  "type": "module",
+  "main": "lib/index.js",
+  "icon": "./assets/dsh-web.svg",
+  "exports": {
+    ".": "./lib/index.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib/index.js",
+    "cordis.patch.yml",
+    "assets/dsh-web",
+    "assets/dsh-web-view",
+    "assets/dsh-web.svg",
+    "README.md"
+  ],
+  "license": "MIT",
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "scripts": {
+    "pack": "npm pack --pack-destination dist"
+  }
+}
