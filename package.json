@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "private": false,
   "description": "Install a desktop shortcut and a standalone WebKit window for the DeepSeek Harness Web UI.",
+  "author": "Longqi Zhan <zlq6forever@gmail.com>",
   "type": "module",
   "main": "lib/index.js",
   "icon": "./assets/dsh-web.svg",

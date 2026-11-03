@@ -93,4 +93,4 @@ DSH_WEB_BROWSER=firefox dsh-web   # 强制沿用旧的 Firefox 窗口方式
 
 ## 许可证
 
-MIT
+[MIT](LICENSE)

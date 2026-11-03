@@ -96,4 +96,4 @@ DSH_WEB_BROWSER=firefox dsh-web   # force the old Firefox window behavior
 
 ## License
 
-MIT
+[MIT](LICENSE)
