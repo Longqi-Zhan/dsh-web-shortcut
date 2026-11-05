@@ -1,6 +1,6 @@
 {
   "name": "dsh-web-shortcut",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": false,
   "description": "Install a desktop shortcut and a standalone WebKit window for the DeepSeek Harness Web UI.",
   "author": "Longqi Zhan <zlq6forever@gmail.com>",

@@ -76,14 +76,24 @@ resolve_dsh() {
 	return 1
 }
 
-http_code() {
-	curl -sS -o /dev/null -w '%{http_code}' --max-time 2 "$1" 2>/dev/null || true
+# Probe the port without assuming curl: minimal desktop and server images often
+# ship without it, and a launcher that cannot see a running server starts a
+# duplicate that dies on EADDRINUSE. A TCP connect is all this needs; bash's
+# /dev/tcp makes it dependency free. curl stays as a fallback for shells built
+# without net redirections.
+port_open() {
+	command -v timeout >/dev/null 2>&1 || return 1
+	timeout 1 bash -c 'exec 3<>"/dev/tcp/$0/$1"' "$1" "$2" >/dev/null 2>&1
 }
 
-# Any HTTP answer (including 401) means a server owns the port.
+# Any answer (including 401) means a server owns the port.
 is_up() {
+	if port_open "$HOST" "$PORT"; then
+		return 0
+	fi
+	command -v curl >/dev/null 2>&1 || return 1
 	local code
-	code="$(http_code "$ORIGIN")"
+	code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 2 "$ORIGIN" 2>/dev/null || true)"
 	[ -n "$code" ] && [ "$code" != "000" ]
 }
 

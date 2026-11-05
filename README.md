@@ -32,11 +32,15 @@ cookie. The standalone viewer:
 
 1. loads the token URL when this shortcut started the server;
 2. otherwise reads only the matching `dsh-auth-*` cookie for the loopback
-   authority from the local Firefox profile and adds it to WebKit’s cookie jar;
-3. falls back to Firefox if that cookie is unavailable.
+   authority from the local Firefox profile, when one exists;
+3. otherwise mints that cookie from the browser-session signing secret in the
+   owner-only `~/.dsh/.credentials.yaml` — the secret the server itself signs
+   cookies with, shared by every session in the same Harness home;
+4. falls back to the default browser if neither is available.
 
-No cookie value is logged or sent anywhere except to the local DSH server. If
-WebKitGTK/PyGObject is missing, the launcher falls back to Firefox.
+No cookie value or signing secret is logged or sent anywhere except to the
+local DSH server. If WebKitGTK/PyGObject is missing, the launcher falls back to
+the default browser.
 
 ## Install
 
@@ -86,6 +90,7 @@ dsh-web            # open the app window (start the server if needed)
 dsh-web --status   # show the running state
 dsh-web --stop     # stop the server this launcher started
 DSH_WEB_BROWSER=firefox dsh-web   # force the old Firefox window behavior
+DSH_WEB_GPU=1 dsh-web             # keep WebKit's GPU compositing
 ```
 
 ## Requirements
@@ -93,6 +98,23 @@ DSH_WEB_BROWSER=firefox dsh-web   # force the old Firefox window behavior
 - Linux with a desktop session (Wayland or X11)
 - GTK 3 and WebKit2GTK 4.1 via PyGObject (`python3-gi`, `gir1.2-webkit2-4.1`)
 - Firefox is optional; it is only used for the cookie handoff/fallback
+
+## Rendering
+
+WebKitGTK composites pages through EGL/DMABUF. Virtual machines, remote desktops
+and software-only Mesa stacks often expose no DRM render node
+(`/dev/dri/renderD*`), and that path then paints nothing: the window opens, the
+page loads (even the title updates), and the client area stays blank.
+
+The viewer checks for `/dev/dri/renderD*` at startup and, when it is missing,
+sets `WEBKIT_DISABLE_DMABUF_RENDERER=1` to fall back to shared-memory rendering;
+such a session has nothing to gain from GPU compositing anyway. To force the
+accelerated path, or to decide yourself:
+
+```bash
+DSH_WEB_GPU=1 dsh-web                     # force GPU compositing
+WEBKIT_DISABLE_DMABUF_RENDERER=0 dsh-web  # explicitly keep DMABUF
+```
 
 ## License
 
